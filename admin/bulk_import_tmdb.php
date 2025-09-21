@@ -51,133 +51,232 @@ function fetchFromTmdb($endpoint) {
     <a href="index.php" class="btn btn-secondary">Back to Admin Panel</a>
 </div>
 
+<?php
+// Data for UI
+$genres = [
+    "Action" => 28, "Adventure" => 12, "Animation" => 16, "Comedy" => 35, "Crime" => 80,
+    "Documentary" => 99, "Drama" => 18, "Family" => 10751, "Fantasy" => 14, "History" => 36,
+    "Horror" => 27, "Music" => 10402, "Mystery" => 9648, "Romance" => 10749,
+    "Science Fiction" => 878, "TV Movie" => 10770, "Thriller" => 53, "War" => 10752, "Western" => 37
+];
+
+$regions = [
+    'hollywood' => ['name' => 'Hollywood', 'params' => ['with_origin_country' => 'US']],
+    'anime' => ['name' => 'Anime', 'params' => ['with_origin_country' => 'JP', 'with_genres' => '16']],
+    'kdrama' => ['name' => 'K-Drama (Korean)', 'params' => ['with_origin_country' => 'KR', 'with_genres' => '18']],
+    'cdrama' => ['name' => 'C-Drama (Chinese)', 'params' => ['with_origin_country' => 'CN', 'with_genres' => '18']],
+    'jdrama' => ['name' => 'J-Drama (Japanese)', 'params' => ['with_origin_country' => 'JP', 'with_genres' => '18']],
+    'pinoy' => ['name' => 'Pinoy Series (Filipino)', 'params' => ['with_origin_country' => 'PH']],
+    'thai' => ['name' => 'Thai Drama', 'params' => ['with_origin_country' => 'TH']],
+    'indian' => ['name' => 'Indian Series', 'params' => ['with_origin_country' => 'IN']],
+    'turkish' => ['name' => 'Turkish Drama', 'params' => ['with_origin_country' => 'TR']],
+];
+?>
+
 <div class="card">
     <div class="card-body">
-        <h5 class="card-title">Import Popular Movies</h5>
-        <p>This tool will import the top 20 most popular movies for the current year from TMDB.</p>
+        <h5 class="card-title">Advanced Bulk Import</h5>
+        <p>Import content from TMDB using advanced filters. This can take some time to process.</p>
         <form method="post">
-            <button type="submit" name="import_movies" class="btn btn-primary">Import Popular Movies of <?php echo date('Y'); ?></button>
+            <div class="form-row">
+                <div class="form-group col-md-3">
+                    <label for="content_type">Content Type</label>
+                    <select name="content_type" id="content_type" class="form-control">
+                        <option value="movie">Movies</option>
+                        <option value="tv">TV Shows</option>
+                    </select>
+                </div>
+                 <div class="form-group col-md-3">
+                    <label for="genre">Genre</label>
+                    <select name="genre" id="genre" class="form-control">
+                        <option value="">Any Genre</option>
+                        <?php foreach ($genres as $name => $id): ?>
+                            <option value="<?php echo $id; ?>"><?php echo $name; ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-group col-md-3">
+                    <label for="region">Region</label>
+                    <select name="region" id="region" class="form-control">
+                        <option value="">Any Region</option>
+                        <?php foreach ($regions as $key => $region): ?>
+                            <option value="<?php echo $key; ?>"><?php echo $region['name']; ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group col-md-3">
+                    <label for="year">Year</label>
+                    <input type="number" name="year" id="year" class="form-control" placeholder="e.g., <?php echo date('Y'); ?>">
+                </div>
+                <div class="form-group col-md-3">
+                    <label for="pages">Number of Pages (20 items per page)</label>
+                    <input type="number" name="pages" id="pages" class="form-control" value="1" min="1" max="10">
+                </div>
+            </div>
+            <button type="submit" name="advanced_import" class="btn btn-primary">Start Advanced Import</button>
         </form>
     </div>
 </div>
 
 <?php
-if (isset($_POST['import_movies'])) {
-    echo '<div class="card mt-4"><div class="card-body">';
-    echo '<h5>Import Log</h5>';
+if (isset($_POST['advanced_import'])) {
+    echo '<div class="card mt-4"><div class="card-body"><h5>Import Log</h5>';
 
-    $year = date('Y');
-    $movies_data = fetchFromTmdb("discover/movie?sort_by=popularity.desc&primary_release_year={$year}&page=1");
+    // Sanitize and get inputs
+    $content_type = $_POST['content_type'] ?? 'movie';
+    $genre = $_POST['genre'] ?? '';
+    $region_key = $_POST['region'] ?? '';
+    $year = $_POST['year'] ?? '';
+    $pages = min((int)($_POST['pages'] ?? 1), 10); // Limit to 10 pages max for performance
 
-    if (!$movies_data || !isset($movies_data['results'])) {
-        echo '<div class="alert alert-danger">Failed to fetch popular movies from TMDB. Please check your API keys and network connection.</div>';
-    } else {
-        $imported_count = 0;
-        $skipped_count = 0;
+    $imported_count = 0;
+    $skipped_count = 0;
+    $failed_count = 0;
 
-        // Get category ID for "Movies"
-        $cat_res = $conn->query("SELECT id FROM categories WHERE name = 'Movies'");
-        if ($cat_res->num_rows == 0) {
-            // If "Movies" category doesn't exist, create it.
-            $conn->query("INSERT INTO categories (name) VALUES ('Movies')");
-            $category_id = $conn->insert_id;
-        } else {
-            $category_id = $cat_res->fetch_assoc()['id'];
+    // Build the dynamic API query
+    $api_params = ['sort_by' => 'popularity.desc'];
+    if ($genre) $api_params['with_genres'] = $genre;
+    if ($year) {
+        if ($content_type == 'movie') $api_params['primary_release_year'] = $year;
+        else $api_params['first_air_date_year'] = $year;
+    }
+    if ($region_key && isset($regions[$region_key])) {
+        $api_params = array_merge($api_params, $regions[$region_key]['params']);
+    }
+
+    // Prepare all statements once
+    $stmt_check = $conn->prepare("SELECT id FROM entries WHERE title = ? AND year = ?");
+    $stmt_entry = $conn->prepare("INSERT INTO entries (title, description, poster, thumbnail, category_id, subcategory_id, country, rating, duration, year, parental_rating) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    $stmt_subcategory = $conn->prepare("INSERT INTO subcategories (name) VALUES (?) ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)");
+    $stmt_season = $conn->prepare("INSERT INTO seasons (entry_id, season_number, poster) VALUES (?, ?, ?)");
+    $stmt_episode = $conn->prepare("INSERT INTO episodes (season_id, episode_number, title, duration, description, thumbnail) VALUES (?, ?, ?, ?, ?, ?)");
+    $stmt_server = $conn->prepare("INSERT INTO servers (entry_id, episode_id, name, url) VALUES (?, ?, ?, ?)");
+
+    for ($page = 1; $page <= $pages; $page++) {
+        $api_params['page'] = $page;
+        $query_string = http_build_query($api_params);
+        $endpoint = "discover/{$content_type}?{$query_string}";
+
+        $data = fetchFromTmdb($endpoint);
+
+        if (!$data || !isset($data['results'])) {
+            echo "<p class='text-danger'>Failed to fetch data for page {$page}. Stopping.</p>";
+            break;
         }
 
-        $stmt_check = $conn->prepare("SELECT id FROM entries WHERE title = ? AND year = ?");
-        $stmt_entry = $conn->prepare("INSERT INTO entries (title, description, poster, thumbnail, category_id, subcategory_id, country, rating, duration, year, parental_rating) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-        $stmt_subcategory = $conn->prepare("INSERT INTO subcategories (name) VALUES (?) ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)");
+        echo "<p><strong>Processing Page {$page}/{$pages}... found " . count($data['results']) . " items.</strong></p>";
 
-        foreach ($movies_data['results'] as $movie_summary) {
-            // Check for duplicates
-            $stmt_check->bind_param("si", $movie_summary['title'], $year);
+        foreach ($data['results'] as $item_summary) {
+            $item_year = substr($item_summary['release_date'] ?? $item_summary['first_air_date'] ?? '', 0, 4);
+            $item_title = $item_summary['title'] ?? $item_summary['name'];
+
+            $stmt_check->bind_param("ss", $item_title, $item_year);
             $stmt_check->execute();
-            $result = $stmt_check->get_result();
-            if ($result->num_rows > 0) {
-                echo "<p><span class='text-warning'>SKIPPED:</span> '{$movie_summary['title']}' already exists.</p>";
+            if ($stmt_check->get_result()->num_rows > 0) {
+                echo "<p><span class='text-warning'>SKIPPED:</span> '{$item_title}' ({$item_year}) already exists.</p>";
                 $skipped_count++;
                 continue;
             }
 
-            // Fetch detailed movie info
-            $movie_details = fetchFromTmdb("movie/{$movie_summary['id']}?append_to_response=release_dates");
-
-            if (!$movie_details) {
-                echo "<p><span class='text-danger'>ERROR:</span> Could not fetch details for '{$movie_summary['title']}'.</p>";
+            $item_details = fetchFromTmdb("{$content_type}/{$item_summary['id']}?append_to_response=videos,credits,release_dates,content_ratings");
+            if (!$item_details) {
+                echo "<p><span class='text-danger'>ERROR:</span> Could not fetch details for '{$item_title}'.</p>";
+                $failed_count++;
                 continue;
             }
 
-            // Prepare data for insertion
-            $title = $movie_details['title'];
-            $description = $movie_details['overview'];
-            $poster = $movie_details['poster_path'] ? 'https://image.tmdb.org/t/p/w500' . $movie_details['poster_path'] : '';
-            $thumbnail = $movie_details['backdrop_path'] ? 'https://image.tmdb.org/t/p/w500' . $movie_details['backdrop_path'] : $poster;
-
-            $country = !empty($movie_details['production_countries']) ? $movie_details['production_countries'][0]['name'] : '';
-            $rating = $movie_details['vote_average'];
-            $runtime = $movie_details['runtime'];
-            $duration = $runtime ? floor($runtime / 60) . 'h ' . ($runtime % 60) . 'm' : '';
-
-            $parental_rating = '';
-            if (!empty($movie_details['release_dates']['results'])) {
-                $us_release_array = array_filter($movie_details['release_dates']['results'], fn($r) => $r['iso_3166_1'] == 'US');
-                if (!empty($us_release_array)) {
-                    $us_release = reset($us_release_array);
-                    if (!empty($us_release['release_dates'][0]['certification'])) {
-                        $parental_rating = $us_release['release_dates'][0]['certification'];
+            $conn->begin_transaction();
+            try {
+                $is_tv = $content_type == 'tv';
+                $description = $item_details['overview'];
+                $poster = $item_details['poster_path'] ? 'https://image.tmdb.org/t/p/w500' . $item_details['poster_path'] : '';
+                $thumbnail = $item_details['backdrop_path'] ? 'https://image.tmdb.org/t/p/w500' . $item_details['backdrop_path'] : $poster;
+                $country = !empty($item_details['production_countries']) ? $item_details['production_countries'][0]['name'] : '';
+                $rating = $item_details['vote_average'];
+                $category_name = $is_tv ? 'TV Series' : 'Movies';
+                $cat_res = $conn->query("SELECT id FROM categories WHERE name = '" . $conn->real_escape_string($category_name) . "'");
+                $category_id = $cat_res->fetch_assoc()['id'];
+                $subcategory_id = null;
+                if (!empty($item_details['genres'])) {
+                     $genre_name = $item_details['genres'][0]['name'];
+                     $stmt_subcategory->bind_param("s", $genre_name);
+                     $stmt_subcategory->execute();
+                     $subcat_res = $conn->query("SELECT id FROM subcategories WHERE name = '" . $conn->real_escape_string($genre_name) . "'");
+                     $subcategory_id = $subcat_res->fetch_assoc()['id'];
+                }
+                $duration = '';
+                $parental_rating = '';
+                if (!$is_tv) {
+                    $duration = $item_details['runtime'] ? floor($item_details['runtime'] / 60) . 'h ' . ($item_details['runtime'] % 60) . 'm' : '';
+                    if (!empty($item_details['release_dates']['results'])) {
+                         $us_release = current(array_filter($item_details['release_dates']['results'], fn($r) => $r['iso_3166_1'] == 'US'));
+                         if ($us_release && !empty($us_release['release_dates'][0]['certification'])) $parental_rating = $us_release['release_dates'][0]['certification'];
+                    }
+                } else {
+                    $duration = !empty($item_details['episode_run_time']) ? $item_details['episode_run_time'][0] . 'm' : '';
+                    if (!empty($item_details['content_ratings']['results'])) {
+                         $us_rating = current(array_filter($item_details['content_ratings']['results'], fn($r) => $r['iso_3166_1'] == 'US'));
+                         if($us_rating) $parental_rating = $us_rating['rating'];
                     }
                 }
-            }
 
-            $subcategory_id = null;
-            if (!empty($movie_details['genres'])) {
-                $genre_name = $movie_details['genres'][0]['name'];
-                $stmt_subcategory->bind_param("s", $genre_name);
-                $stmt_subcategory->execute();
-                $subcat_id_res = $conn->query("SELECT id FROM subcategories WHERE name = '" . $conn->real_escape_string($genre_name) . "'");
-                if ($subcat_id_res->num_rows > 0) {
-                    $subcategory_id = $subcat_id_res->fetch_assoc()['id'];
+                $stmt_entry->bind_param("ssssiisdsis", $item_title, $description, $poster, $thumbnail, $category_id, $subcategory_id, $country, $rating, $duration, $item_year, $parental_rating);
+                $stmt_entry->execute();
+                $entry_id = $conn->insert_id;
+
+                if (!$is_tv) {
+                    $servers = [['VidSrc', "https://vidsrc.net/embed/movie/{$item_details['id']}"], ['VidJoy', "https://vidjoy.pro/embed/movie/{$item_details['id']}"]];
+                    foreach ($servers as $server) {
+                        $episode_id_null = null;
+                        $stmt_server->bind_param("iiss", $entry_id, $episode_id_null, $server[0], $server[1]);
+                        $stmt_server->execute();
+                    }
+                } else {
+                    foreach ($item_details['seasons'] as $season_data) {
+                        if ($season_data['season_number'] == 0) continue;
+                        $season_details = fetchFromTmdb("tv/{$item_details['id']}/season/{$season_data['season_number']}");
+                        if (!$season_details) continue;
+                        $season_poster = $season_details['poster_path'] ? 'https://image.tmdb.org/t/p/w500' . $season_details['poster_path'] : $poster;
+                        $stmt_season->bind_param("iis", $entry_id, $season_details['season_number'], $season_poster);
+                        $stmt_season->execute();
+                        $season_id = $conn->insert_id;
+                        foreach ($season_details['episodes'] as $episode_data) {
+                            $ep_desc = $episode_data['overview'];
+                            $ep_thumb = $episode_data['still_path'] ? 'https://image.tmdb.org/t/p/w500' . $episode_data['still_path'] : $thumbnail;
+                            $ep_duration = $episode_data['runtime'] ? $episode_data['runtime'] . 'm' : '';
+                            $stmt_episode->bind_param("isssss", $season_id, $episode_data['episode_number'], $episode_data['name'], $ep_duration, $ep_desc, $ep_thumb);
+                            $stmt_episode->execute();
+                            $episode_id = $conn->insert_id;
+                            $servers = [['VidSrc', "https://vidsrc.net/embed/tv/{$item_details['id']}/{$season_data['season_number']}/{$episode_data['episode_number']}"], ['VidJoy', "https://vidjoy.pro/embed/tv/{$item_details['id']}/{$season_data['season_number']}/{$episode_data['episode_number']}"]];
+                            foreach ($servers as $server) {
+                                $entry_id_null = null;
+                                $stmt_server->bind_param("iiss", $entry_id_null, $episode_id, $server[0], $server[1]);
+                                $stmt_server->execute();
+                            }
+                        }
+                         usleep(250000);
+                    }
                 }
-            }
-
-            $stmt_entry->bind_param("ssssiisdsis", $title, $description, $poster, $thumbnail, $category_id, $subcategory_id, $country, $rating, $duration, $year, $parental_rating);
-
-            if ($stmt_entry->execute()) {
-                $entry_id = $stmt_entry->insert_id;
-
-                // Insert embed servers
-                $stmt_server = $conn->prepare("INSERT INTO servers (entry_id, name, url) VALUES (?, ?, ?)");
-                $servers = [
-                    ['VidSrc', "https://vidsrc.net/embed/movie/{$movie_details['id']}"],
-                    ['VidJoy', "https://vidjoy.pro/embed/movie/{$movie_details['id']}"],
-                    ['MultiEmbed', "https://multiembed.mov/directstream.php?video_id={$movie_details['id']}&tmdb=1"],
-                    ['Embed.su', "https://embed.su/embed/movie?id={$movie_details['id']}"]
-                ];
-
-                foreach ($servers as $server) {
-                    $stmt_server->bind_param("iss", $entry_id, $server[0], $server[1]);
-                    $stmt_server->execute();
-                }
-                $stmt_server->close();
-
-                echo "<p><span class='text-success'>IMPORTED:</span> '{$title}' with " . count($servers) . " embed servers.</p>";
+                $conn->commit();
+                echo "<p><span class='text-success'>IMPORTED:</span> '{$item_title}'.</p>";
                 $imported_count++;
-            } else {
-                echo "<p><span class='text-danger'>ERROR:</span> Failed to import '{$title}'. DB Error: " . $stmt_entry->error . "</p>";
+            } catch (Exception $e) {
+                $conn->rollback();
+                echo "<p><span class='text-danger'>ERROR:</span> Failed to import '{$item_title}'. Reason: {$e->getMessage()}</p>";
+                $failed_count++;
             }
-
-            // Avoid hitting API rate limits too quickly
-            usleep(250000); // 250ms delay
+            usleep(250000);
         }
-
-        $stmt_check->close();
-        $stmt_entry->close();
-        $stmt_subcategory->close();
-
-        echo "<hr><p><strong>Import complete.</strong> Imported: {$imported_count}, Skipped (duplicates): {$skipped_count}.</p>";
     }
-
+    $stmt_check->close();
+    $stmt_entry->close();
+    $stmt_subcategory->close();
+    $stmt_season->close();
+    $stmt_episode->close();
+    $stmt_server->close();
+    echo "<hr><p><strong>Import complete.</strong> Imported: {$imported_count}, Skipped: {$skipped_count}, Failed: {$failed_count}.</p>";
     echo '</div></div>';
 }
 
