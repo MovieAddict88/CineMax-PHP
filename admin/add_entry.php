@@ -44,6 +44,29 @@ include '../header.php';
     <a href="manage_entries.php" class="btn btn-secondary">Back to Entries</a>
 </div>
 
+<div class="card mb-4">
+    <div class="card-body">
+        <h5 class="card-title">Fetch from TMDB</h5>
+        <div class="form-row">
+            <div class="form-group col-md-3">
+                <label for="tmdb_id">TMDB ID</label>
+                <input type="text" id="tmdb_id" class="form-control" placeholder="e.g., 550">
+            </div>
+            <div class="form-group col-md-3">
+                <label for="tmdb_type">Content Type</label>
+                <select id="tmdb_type" class="form-control">
+                    <option value="movie">Movie</option>
+                    <option value="tv">TV Series</option>
+                </select>
+            </div>
+            <div class="form-group col-md-3 d-flex align-items-end">
+                <button type="button" id="fetch_tmdb" class="btn btn-info">Fetch Data</button>
+            </div>
+        </div>
+        <div id="tmdb-status" class="mt-2"></div>
+    </div>
+</div>
+
 <div class="card">
     <div class="card-body">
         <form action="add_entry.php" method="post">
@@ -115,5 +138,106 @@ include '../header.php';
 
 <?php
 $conn->close();
+?>
+
+<script>
+document.getElementById('fetch_tmdb').addEventListener('click', function() {
+    const tmdbId = document.getElementById('tmdb_id').value;
+    const tmdbType = document.getElementById('tmdb_type').value;
+    const statusDiv = document.getElementById('tmdb-status');
+
+    if (!tmdbId) {
+        statusDiv.innerHTML = '<div class="alert alert-warning">Please enter a TMDB ID.</div>';
+        return;
+    }
+
+    statusDiv.innerHTML = '<div class="alert alert-info">Fetching data from TMDB...</div>';
+
+    fetch(`../api/tmdb.php?id=${tmdbId}&type=${tmdbType}`)
+        .then(response => {
+            if (!response.ok) {
+                // Try to get error message from TMDB response body
+                return response.json().then(errorBody => {
+                    throw new Error(errorBody.status_message || `Request failed with status ${response.status}`);
+                });
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (data.success === false) {
+                throw new Error(data.status_message || 'TMDB API returned an error.');
+            }
+
+            statusDiv.innerHTML = '<div class="alert alert-success">Data fetched successfully!</div>';
+
+            // Populate form fields
+            document.getElementById('title').value = data.title || data.name || '';
+            document.getElementById('description').value = data.overview || '';
+            if (data.poster_path) {
+                document.getElementById('poster').value = 'https://image.tmdb.org/t/p/w500' + data.poster_path;
+            }
+
+            const releaseDate = data.release_date || data.first_air_date || '';
+            if (releaseDate) {
+                document.getElementById('year').value = releaseDate.substring(0, 4);
+            }
+
+            if (data.production_countries && data.production_countries.length > 0) {
+                document.getElementById('country').value = data.production_countries.map(c => c.name).join(', ');
+            }
+
+            document.getElementById('rating').value = data.vote_average ? data.vote_average.toFixed(1) : '';
+
+            if (tmdbType === 'movie') {
+                if (data.runtime) {
+                    const hours = Math.floor(data.runtime / 60);
+                    const minutes = data.runtime % 60;
+                    document.getElementById('duration').value = `${hours}h ${minutes}m`;
+                }
+                // Set category to "Movies"
+                setCategory('Movies');
+
+                // Find parental rating
+                if (data.release_dates && data.release_dates.results) {
+                    const usRelease = data.release_dates.results.find(r => r.iso_3166_1 === 'US');
+                    if (usRelease && usRelease.release_dates[0] && usRelease.release_dates[0].certification) {
+                        document.getElementById('parental_rating').value = usRelease.release_dates[0].certification;
+                    }
+                }
+
+            } else if (tmdbType === 'tv') {
+                if (data.episode_run_time && data.episode_run_time.length > 0) {
+                    document.getElementById('duration').value = `${data.episode_run_time[0]}m`;
+                }
+                // Set category to "TV Series"
+                setCategory('TV Series');
+
+                // Find parental rating
+                if (data.content_ratings && data.content_ratings.results) {
+                    const usRating = data.content_ratings.results.find(r => r.iso_3166_1 === 'US');
+                    if (usRating && usRating.rating) {
+                        document.getElementById('parental_rating').value = usRating.rating;
+                    }
+                }
+            }
+        })
+        .catch(error => {
+            console.error('Error fetching from TMDB:', error);
+            statusDiv.innerHTML = `<div class="alert alert-danger">Error fetching data: ${error.message}</div>`;
+        });
+});
+
+function setCategory(categoryName) {
+    const categorySelect = document.getElementById('category_id');
+    for (let i = 0; i < categorySelect.options.length; i++) {
+        if (categorySelect.options[i].text.trim().toLowerCase() === categoryName.trim().toLowerCase()) {
+            categorySelect.selectedIndex = i;
+            break;
+        }
+    }
+}
+</script>
+
+<?php
 include '../footer.php';
 ?>
