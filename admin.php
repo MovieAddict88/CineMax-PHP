@@ -5519,68 +5519,42 @@ const TWOTWOEMBED_BASE = 'https://2embed.cc/embed';
             }
         }
 
-                                 function exportData() {
-            try {
-                // Export the Categories structure directly
-                const dataStr = JSON.stringify(currentData, null, 2);
-                const dataSizeMB = (dataStr.length / 1024 / 1024).toFixed(2);
-                
-                console.log(`📤 Exporting ${dataSizeMB}MB of data`);
-                
-                // For large data, use chunked download approach
-                if (dataStr.length > 50 * 1024 * 1024) { // > 50MB
-                    showStatus('info', `Preparing large export (${dataSizeMB}MB)...`);
-                    exportLargeData(dataStr);
-                    return;
-                }
-                
-                // Standard export for smaller data
-                const dataBlob = new Blob([dataStr], { type: 'application/json' });
-                
-                // Check if blob was created successfully
-                if (!dataBlob || dataBlob.size === 0) {
-                    throw new Error('Failed to create export file blob');
-                }
-                
-                const link = document.createElement('a');
-                const url = URL.createObjectURL(dataBlob);
-                
-                if (!url) {
-                    throw new Error('Failed to create download URL');
-                }
-                
-                link.href = url;
-                link.download = `playlist-${new Date().toISOString().split('T')[0]}.json`;
-                
-                // Add link to document temporarily to ensure it works
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-                
-                // Clean up the object URL after download
-                setTimeout(() => {
-                    URL.revokeObjectURL(url);
-                }, 1000);
-                
-                showStatus('success', `Data exported successfully! File size: ${dataSizeMB}MB`);
-                
-            } catch (error) {
-                console.error('Export error:', error);
-                showStatus('error', `Export failed: ${error.message}`);
-                
-                // Fallback: try to copy to clipboard for large data
-                if (error.message.includes('large') || error.message.includes('blob')) {
-                    try {
-                        const dataStr = JSON.stringify(currentData, null, 2);
-                        navigator.clipboard.writeText(dataStr).then(() => {
-                            showStatus('warning', 'Export failed, but data copied to clipboard. Paste into a text file and save as .json');
-                        }).catch(() => {
-                            showStatus('error', 'Export failed and clipboard unavailable. Try using GitHub upload instead.');
-                        });
-                    } catch (clipboardError) {
-                        showStatus('error', 'Export failed. Try using GitHub upload for large datasets.');
+        async function exportData() {
+            showStatus('info', 'Saving data to the server...');
+            let successCount = 0;
+            let errorCount = 0;
+
+            for (const category of currentData.Categories) {
+                try {
+                    const response = await fetch('api.php', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            category: category.MainCategory,
+                            content: category
+                        }),
+                    });
+
+                    const result = await response.json();
+
+                    if (result.status === 'success') {
+                        successCount++;
+                    } else {
+                        errorCount++;
+                        console.error(`Failed to save ${category.MainCategory}:`, result.message);
                     }
+                } catch (error) {
+                    errorCount++;
+                    console.error(`Error saving ${category.MainCategory}:`, error);
                 }
+            }
+
+            if (errorCount === 0) {
+                showStatus('success', `All ${successCount} categories saved successfully!`);
+            } else {
+                showStatus('error', `Saved ${successCount} categories, but ${errorCount} failed. Check console for details.`);
             }
         }
         
