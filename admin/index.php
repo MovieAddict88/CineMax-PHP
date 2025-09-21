@@ -23,6 +23,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['add_category'])) {
     <h2>Admin Panel - Manage Categories</h2>
     <div>
         <a href="manage_entries.php" class="btn btn-info">Manage Entries</a>
+        <a href="bulk_import_tmdb.php" class="btn btn-success">Bulk Import from TMDB</a>
         <a href="logout.php" class="btn btn-danger">Logout</a>
     </div>
 </div>
